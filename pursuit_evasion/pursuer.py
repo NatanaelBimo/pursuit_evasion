@@ -1,90 +1,121 @@
-import math
-
-from geometry_msgs.msg import Twist
-
 import rclpy
 from rclpy.node import Node
+from turtlesim.msg import Pose
+from geometry_msgs.msg import Twist
+import numpy as np
+import math
 
-from tf2_ros import TransformException
-from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener
+def artificial_field_potential(x,y,evader_x,evader_y,evader_theta,x_max,y_max):
+        # Attraction caused by evader : field_constant * (field_weight) ^ distance
+        fcon_evader = 1.2 # field_constant
+        fwei_evader = -3 # field_weight
+        att_evader = fwei_evader*(fcon_evader)**(-math.sqrt((x - (evader_x + 1*np.cos(evader_theta)))**2 + (y - (evader_y + 1*np.sin(evader_theta)))**2))
 
-from turtlesim.srv import Spawn
+        # Repel caused by wall : field_constant * (field_weight) ^ -distance
+        fcon_wall = 3 # field_constant
+        fwei_wall = 1 # field_weight
+        rep_wall_up = fwei_wall*(fcon_wall)**(y - y_max)
+        rep_wall_down = fwei_wall*(fcon_wall)**(-y)
+        rep_wall_right = fwei_wall*(fcon_wall)**(x - x_max)
+        rep_wall_left = fwei_wall*(fcon_wall)**(-x)
+        rep_wall = rep_wall_up + rep_wall_down + rep_wall_right + rep_wall_left
+
+        
+        # Repel caused by obstacle 1 : field_constant * (field_weight) ^ -distance
+        obs1_pos_x = 4.0
+        obs1_pos_y = 3.0
+        obs1_rad = 1 + 0.2
+        fcon_obs1 = 3 # field_constant
+        fwei_obs1 = 1 # field_weight
+        rep_obs1 = fwei_obs1*(fcon_obs1)**(obs1_rad-math.sqrt((x - obs1_pos_x)**2 + (y - obs1_pos_y)**2))
+
+        # Repel caused by obstacle 2 : field_constant * (field_weight) ^ -distance
+        obs2_pos_x = 7.5
+        obs2_pos_y = 6.5
+        obs2_rad = 1 + 0.2
+        fcon_obs2 = 3 # field_constant
+        fwei_obs2 = 1 # field_weight
+        rep_obs2 = fwei_obs2*(fcon_obs2)**(obs2_rad-math.sqrt((x - obs2_pos_x)**2 + (y - obs2_pos_y)**2))
+
+        # Repel caused by obstacle 3 : field_constant * (field_weight) ^ -distance
+        obs3_pos_x = 2.5
+        obs3_pos_y = 8.5
+        obs3_rad = 1 + 0.2
+        fcon_obs3 = 3 # field_constant
+        fwei_obs3 = 1 # field_weight
+        rep_obs3 = fwei_obs3*(fcon_obs3)**(obs3_rad-math.sqrt((x - obs3_pos_x)**2 + (y - obs3_pos_y)**2))
+
+        return att_evader + rep_wall + rep_obs1 + rep_obs2 + rep_obs3
 
 class TurtlePursuer(Node):
-
     def __init__(self):
-        super().__init__('pursuer_turtle')
+        super().__init__("turtle_pursuer")
 
-        self.target_turtle = self.declare_parameter(
-            'target_turtle', 'turtleEvader'
-        ).get_parameter_value().string_value
+        # Publisher (send velocity to turtle2 & turtle1)
+        self.cmd_vel_publisher_ = self.create_publisher(Twist, "/turtle2/cmd_vel", 10)
 
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # Subscriber (read position of turtle2)
+        self.pose_subscriber_ = self.create_subscription(Pose,"/turtle2/pose", self.update_position, 10)
 
-        self.spawner = self.create_client(Spawn, 'spawn')
+        # Subscriber (read position of turtle1)
+        self.pose_subscriber_evader_ = self.create_subscription(Pose,"/turtle1/pose", self.update_position_evader, 10)
 
-        self.turtle_spawning_service_ready = False
+        # Timer to check the position and move the turtle every 0.1 seconds
+        self.timer = self.create_timer(0.1, self.pursuit_evader)
 
-        self.turtle_spawned = False
+        # Wall avoidance parameters
+        self.wall_safe_distance = 1  # Distance to maintain from the wall
+        self.x_min, self.x_max = 0.0, 11.0  # X boundaries of the turtlesim window
+        self.y_min, self.y_max = 0.0, 11.0  # Y boundaries of the turtlesim window
 
-        self.publisher = self.create_publisher(Twist, 'turtlePursuer/cmd_vel', 10)
+    def update_position(self, pose:Pose):
+        self.x = pose.x
+        self.y = pose.y
+        self.front_x = pose.x + (self.wall_safe_distance*np.cos(pose.theta))
+        self.front_y = pose.y + (self.wall_safe_distance*np.sin(pose.theta))
 
-        self.timer = self.create_timer(1.0, self.on_timer)
+        # left right "sensor" to detect APF
+        self.FoV = (30/180)*np.pi # in rad
+        # left
+        self.front_left_x = pose.x + ((1/np.cos(self.FoV))*np.cos(pose.theta+self.FoV))
+        self.front_left_y = pose.y + ((1/np.cos(self.FoV))*np.sin(pose.theta+self.FoV))
+        # right
+        self.front_right_x = pose.x + ((1/np.cos(self.FoV))*np.cos(pose.theta-self.FoV))
+        self.front_right_y = pose.y + ((1/np.cos(self.FoV))*np.sin(pose.theta-self.FoV))
 
+    def update_position_evader(self, pose:Pose):
+        self.poseE_x = pose.x
+        self.poseE_y = pose.y
+        self.poseE_theta = pose.theta
 
-    def on_timer(self):
-        from_frame_rel = self.target_turtle
-        to_frame_rel = 'turtlePursuer'
-
-        if self.turtle_spawning_service_ready:
-            if self.turtle_spawned:
-
-                try:
-                    t = self.tf_buffer.lookup_transform(
-                        to_frame_rel,
-                        from_frame_rel,
-                        rclpy.time.Time())
-                except TransformException as ex:
-                    self.get_logger().info(
-                        f'Could not transform {to_frame_rel} to {from_frame_rel}: {ex}')
-                    return
-
-                msg = Twist()
-                scale_rotation_rate = 1.0
-                msg.angular.z = scale_rotation_rate * math.atan2(
-                    t.transform.translation.y,
-                    t.transform.translation.x)
-
-                scale_forward_speed = 0.5
-                msg.linear.x = scale_forward_speed * math.sqrt(
-                    t.transform.translation.x ** 2 +
-                    t.transform.translation.y ** 2)
-
-                self.publisher.publish(msg)
-            else:
-                if self.result.done():
-                    self.get_logger().info(
-                        f'Successfully spawned {self.result.result().name}')
-                    self.turtle_spawned = True
-                else:
-                    self.get_logger().info('Spawn is not finished')
+    def pursuit_evader(self): 
+        cmd = Twist()
+        dist = math.sqrt((self.x - self.poseE_x)**2 + (self.y - self.poseE_y)**2)
+        if dist < 0.7:
+            cmd.linear.x = 0.0
+            self.get_logger().info("Captured!")
+            while True:
+                cmd.linear.x = 0.0
         else:
-            if self.spawner.service_is_ready():
-                # Initialize request with turtle name and coordinates
-                # Note that x, y and theta are defined as floats in turtlesim/srv/Spawn
-                request = Spawn.Request()
-                request.name = 'turtlePursuer'
-                request.x = 0.0
-                request.y = 0.0
-                request.theta = 0.0
-                # Call request
-                self.result = self.spawner.call_async(request)
-                self.turtle_spawning_service_ready = True
-            else:
-                # Check if the service is ready
-                self.get_logger().info('Service is not ready')
+            cmd.linear.x = 1.5
+        
+        self.APF_front = artificial_field_potential(self.front_x,self.front_y,self.poseE_x,self.poseE_y,self.poseE_theta,self.x_max,self.y_max)
+        self.APF_left = artificial_field_potential(self.front_left_x,self.front_left_y,self.poseE_x,self.poseE_y,self.poseE_theta,self.x_max,self.y_max)
+        self.APF_right = artificial_field_potential(self.front_right_x,self.front_right_y,self.poseE_x,self.poseE_y,self.poseE_theta,self.x_max,self.y_max)
+        self.APF_current = artificial_field_potential(self.x,self.y,self.poseE_x,self.poseE_y,self.poseE_theta,self.x_max,self.y_max)
+
+        if self.APF_left < self.APF_front and self.APF_left < self.APF_right and self.APF_left < self.APF_current :
+            cmd.angular.z = 1.0
+        elif self.APF_right < self.APF_front and self.APF_right < self.APF_left and self.APF_right < self.APF_current :
+            cmd.angular.z = -1.0
+        elif self.APF_current < self.APF_front and self.APF_left < self.APF_right :
+            cmd.angular.z = 3.0
+        elif self.APF_current < self.APF_front and self.APF_right < self.APF_left :
+            cmd.angular.z = -3.0
+        else:
+            cmd.angular.z = 0.0
+
+        self.cmd_vel_publisher_.publish(cmd)
 
 def main():
     rclpy.init()
@@ -93,5 +124,4 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-
     rclpy.shutdown()

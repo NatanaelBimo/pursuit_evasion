@@ -1,162 +1,120 @@
-import math
-import random
-from geometry_msgs.msg import Twist
-from turtlesim.msg import Pose
 import rclpy
 from rclpy.node import Node
-from tf2_ros import TransformException
-from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener
+from turtlesim.msg import Pose
+from geometry_msgs.msg import Twist
+import numpy as np
+import math
 
+def artificial_field_potential(x,y,pursuer_x,pursuer_y,x_max,y_max):
+        # Repel caused by pursuer : field_constant * (field_weight) ^ -distance
+        fcon_pursuer = 1.2 # field_constant
+        fwei_pursuer = 2 # field_weight
+        rep_pursuer = fwei_pursuer*(fcon_pursuer)**(-math.sqrt((x - pursuer_x)**2 + (y - pursuer_y)**2))
+
+        # Repel caused by wall : field_constant * (field_weight) ^ -distance
+        fcon_wall = 3 # field_constant
+        fwei_wall = 1 # field_weight
+        rep_wall_up = fwei_wall*(fcon_wall)**(y - y_max)
+        rep_wall_down = fwei_wall*(fcon_wall)**(-y)
+        rep_wall_right = fwei_wall*(fcon_wall)**(x - x_max)
+        rep_wall_left = fwei_wall*(fcon_wall)**(-x)
+        rep_wall = rep_wall_up + rep_wall_down + rep_wall_right + rep_wall_left
+
+        # Repel caused by obstacle 1 : field_constant * (field_weight) ^ -distance
+        obs1_pos_x = 4.0
+        obs1_pos_y = 3.0
+        obs1_rad = 1 + 0.2
+        fcon_obs1 = 3 # field_constant
+        fwei_obs1 = 1 # field_weight
+        rep_obs1 = fwei_obs1*(fcon_obs1)**(obs1_rad-math.sqrt((x - obs1_pos_x)**2 + (y - obs1_pos_y)**2))
+
+        # Repel caused by obstacle 2 : field_constant * (field_weight) ^ -distance
+        obs2_pos_x = 7.5
+        obs2_pos_y = 6.5
+        obs2_rad = 1 + 0.2
+        fcon_obs2 = 3 # field_constant
+        fwei_obs2 = 1 # field_weight
+        rep_obs2 = fwei_obs2*(fcon_obs2)**(obs2_rad-math.sqrt((x - obs2_pos_x)**2 + (y - obs2_pos_y)**2))
+
+        # Repel caused by obstacle 3 : field_constant * (field_weight) ^ -distance
+        obs3_pos_x = 2.5
+        obs3_pos_y = 8.5
+        obs3_rad = 1 + 0.2
+        fcon_obs3 = 3 # field_constant
+        fwei_obs3 = 1 # field_weight
+        rep_obs3 = fwei_obs3*(fcon_obs3)**(obs3_rad-math.sqrt((x - obs3_pos_x)**2 + (y - obs3_pos_y)**2))
+
+        return rep_pursuer + rep_wall + rep_obs1 + rep_obs2 + rep_obs3
 
 class TurtleEvader(Node):
     def __init__(self):
-        super().__init__('evader_turtle')
+        super().__init__("turtle_evader")
 
-        # Declare the pursuer turtle name
-        self.pursuer_turtle = self.declare_parameter(
-            'pursuer_turtle', 'turtlePursuer'
-        ).get_parameter_value().string_value
+        # Publisher (send velocity to turtle1)
+        self.cmd_vel_publisher_ = self.create_publisher(Twist, "/turtle1/cmd_vel", 10)
 
-        # Buffer and listener for TF2
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # Subscriber (read position of turtle1)
+        self.pose_subscriber_ = self.create_subscription(Pose,"/turtle1/pose", self.update_position, 10)
 
-        # Publisher to send velocity commands to the evader (turtle1)
-        self.publisher = self.create_publisher(Twist, 'turtle1/cmd_vel', 10)
-
-        # Subscribe to turtle1's pose to monitor its position (for wall avoidance)
-        self.create_subscription(Pose, 'turtle1/pose', self.update_position, 10)
+        # Subscriber (read position of turtle2)
+        self.pose_subscriber_pursuer_ = self.create_subscription(Pose,"/turtle2/pose", self.update_position_pursuer, 10)
 
         # Timer to check the position and move the turtle every 0.1 seconds
         self.timer = self.create_timer(0.1, self.evade_pursuer)
 
         # Wall avoidance parameters
-        self.wall_safe_distance = .5  # Distance to maintain from the wall
+        self.wall_safe_distance = 1  # Distance to maintain from the wall
         self.x_min, self.x_max = 0.0, 11.0  # X boundaries of the turtlesim window
         self.y_min, self.y_max = 0.0, 11.0  # Y boundaries of the turtlesim window
 
-        # Current position of the evader
-        self.evader_x = 5.5
-        self.evader_y = 5.5
+    
+    def update_position(self, pose:Pose):
+        self.x = pose.x
+        self.y = pose.y
+        self.front_x = pose.x + (self.wall_safe_distance*np.cos(pose.theta))
+        self.front_y = pose.y + (self.wall_safe_distance*np.sin(pose.theta))
 
-        # Reverse mechanism state
-        self.reversing = False
-        self.reverse_counter = 0  # How long to reverse
-        self.max_reverse_steps = 10  # Maximum time steps to reverse
+        # left right "sensor" to detect APF
+        self.FoV = (30/180)*np.pi # in rad
+        # left
+        self.front_left_x = pose.x + ((1/np.cos(self.FoV))*np.cos(pose.theta+self.FoV))
+        self.front_left_y = pose.y + ((1/np.cos(self.FoV))*np.sin(pose.theta+self.FoV))
+        # right
+        self.front_right_x = pose.x + ((1/np.cos(self.FoV))*np.cos(pose.theta-self.FoV))
+        self.front_right_y = pose.y + ((1/np.cos(self.FoV))*np.sin(pose.theta-self.FoV))
 
-        # Random movement parameters
-        self.sharp_turn_chance = 0.1  # 10% chance of sharp turn
-        self.random_motion_counter = 0
-        self.exploration_threshold = 5.0  # Evader explores if far enough from pursuer
-
-    def update_position(self, msg: Pose):
-        """Update the evader's current position for wall detection."""
-        self.evader_x = msg.x
-        self.evader_y = msg.y
+    def update_position_pursuer(self, pose:Pose):
+        self.poseP_x = pose.x
+        self.poseP_y = pose.y
 
     def evade_pursuer(self):
-        # If the turtle is currently reversing, continue that behavior
-        if self.reversing:
-            self.reverse_turtle()
-            return
-
-        # Frame names for evader and pursuer
-        from_frame_rel = self.pursuer_turtle
-        to_frame_rel = 'turtle1'  # The evader is now 'turtle1'
-
-        try:
-            # Lookup the transform between pursuer and evader
-            t = self.tf_buffer.lookup_transform(
-                to_frame_rel,
-                from_frame_rel,
-                rclpy.time.Time())
-        except TransformException as ex:
-            self.get_logger().info(
-                f'Could not transform {to_frame_rel} to {from_frame_rel}: {ex}')
-            return
-
-        # Calculate the distance and angle to the pursuer
-        distance_to_pursuer = math.sqrt(
-            t.transform.translation.x ** 2 +
-            t.transform.translation.y ** 2)
-
-        # Create a Twist message to control turtle1's velocity
-        msg = Twist()
-
-        # If the evader is far from the pursuer, explore the environment
-        if distance_to_pursuer > self.exploration_threshold:
-            self.explore(msg)
+        cmd = Twist()
+        dist = math.sqrt((self.x - self.poseP_x)**2 + (self.y - self.poseP_y)**2)
+        if dist < 0.7:
+            cmd.linear.x = 0.0
+            self.get_logger().info("Captured!")
+            while True:
+                cmd.linear.x = 0.0
         else:
-            self.evade(msg, t)
+            cmd.linear.x = 1.5
+        
+        self.APF_front = artificial_field_potential(self.front_x,self.front_y,self.poseP_x,self.poseP_y,self.x_max,self.y_max)
+        self.APF_left = artificial_field_potential(self.front_left_x,self.front_left_y,self.poseP_x,self.poseP_y,self.x_max,self.y_max)
+        self.APF_right = artificial_field_potential(self.front_right_x,self.front_right_y,self.poseP_x,self.poseP_y,self.x_max,self.y_max)
+        self.APF_current = artificial_field_potential(self.x,self.y,self.poseP_x,self.poseP_y,self.x_max,self.y_max)
 
-        # Check if the turtle is near any wall and adjust direction
-        if self.avoid_walls(msg):
-            # If the wall is near, initiate reverse behavior
-            self.reversing = True
-            self.reverse_counter = self.max_reverse_steps
-            return
-
-        # Publish the velocity command if it's safe to move
-        self.publisher.publish(msg)
-
-    def evade(self, msg, t):
-        """Evade the pursuer with randomized movements."""
-        # Calculate the angle away from the pursuer
-        angle_away_from_pursuer = math.atan2(
-            -t.transform.translation.y,
-            -t.transform.translation.x)
-
-        # Randomly apply sharp turns for more dynamic motion
-        if random.random() < self.sharp_turn_chance:
-            msg.angular.z = random.uniform(-3.0, 3.0)  # Sharp turn
-            msg.linear.x = random.uniform(0.5, 1.5)  # Adjust speed
+        if self.APF_left < self.APF_front and self.APF_left < self.APF_right and self.APF_left < self.APF_current :
+            cmd.angular.z = 1.0
+        elif self.APF_right < self.APF_front and self.APF_right < self.APF_left and self.APF_right < self.APF_current :
+            cmd.angular.z = -1.0
+        elif self.APF_current < self.APF_front and self.APF_left < self.APF_right :
+            cmd.angular.z = 3.0
+        elif self.APF_current < self.APF_front and self.APF_right < self.APF_left :
+            cmd.angular.z = -3.0
         else:
-            # Move in the opposite direction from the pursuer with slight variation
-            msg.angular.z = angle_away_from_pursuer + random.uniform(-0.5, 0.5)
-            msg.linear.x = 1.0  # Linear speed to move away
+            cmd.angular.z = 0.0
 
-    def explore(self, msg):
-        """Explore the environment randomly when far from the pursuer."""
-        if self.random_motion_counter <= 0:
-            # Set random angular and linear velocities
-            msg.angular.z = random.uniform(-1.0, 1.0)
-            msg.linear.x = random.uniform(0.5, 2.0)
-            # Set how long to continue this motion
-            self.random_motion_counter = random.randint(10, 50)
-        else:
-            # Continue current random movement
-            self.random_motion_counter -= 1
-
-    def avoid_walls(self, msg):
-        """Detect walls and adjust movement to bounce away from them."""
-        # Check if the turtle is near the left or right boundary
-        if self.evader_x < self.x_min + self.wall_safe_distance or self.evader_x > self.x_max - self.wall_safe_distance:
-            return True  # Wall detected
-
-        # Check if the turtle is near the top or bottom boundary
-        if self.evader_y < self.y_min + self.wall_safe_distance or self.evader_y > self.y_max - self.wall_safe_distance:
-            return True  # Wall detected
-
-        return False
-
-    def reverse_turtle(self):
-        """Make the turtle reverse when it hits a wall."""
-        msg = Twist()
-
-        # If we are still reversing, continue moving backward
-        if self.reverse_counter > 0:
-            msg.linear.x = -.5  # Move backward
-            msg.angular.z = random.uniform(-2.5, 2.5)  # Turn randomly while reversing
-            self.reverse_counter -= 1
-        else:
-            # Stop reversing after a set amount of time
-            self.reversing = False
-            msg.linear.x = 0.0
-            msg.angular.z = random.uniform(-1.0, 1.0)  # Random turn to find a new path
-
-        self.publisher.publish(msg)
-
+        self.cmd_vel_publisher_.publish(cmd)
 
 def main():
     rclpy.init()
