@@ -4,43 +4,6 @@ from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
 
-# def generate_launch_description():
-#     return LaunchDescription([
-#         Node(
-#             package='turtlesim',
-#             executable='turtlesim_node',
-#             name='sim'
-#         ),
-#         Node(
-#             package='pursuit_evasion',
-#             executable='turtle_tf2_broadcaster',
-#             name='broadcaster1',
-#             parameters=[
-#                 {'turtlename': 'turtle1'}
-#             ]
-#         ),
-#         DeclareLaunchArgument(
-#             'target_turtle', default_value='turtle1',
-#             description='Target turtle name.'
-#         ),
-#         Node(
-#             package='pursuit_evasion',
-#             executable='turtle_tf2_broadcaster',
-#             name='broadcaster2',
-#             parameters=[
-#                 {'turtlename': 'turtlePursuer'}
-#             ]
-#         ),
-#         Node(
-#             package='pursuit_evasion',
-#             executable='pursuer',
-#             name='listener',
-#             parameters=[
-#                 {'target_turtle': LaunchConfiguration('target_turtle')}
-#             ]
-#         ),
-#     ])
-
 def generate_launch_description():
     return LaunchDescription([
         # Launch turtlesim node
@@ -92,6 +55,12 @@ def generate_launch_description():
             parameters=[
                 {'pursuer_turtle': 'turtlePursuer'}
             ]
+        ),
+
+        Node(
+            package='pursuit_evasion',
+            executable='obstacle',
+            name='obstacle_spawner'
         )
     ])
 

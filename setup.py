@@ -22,7 +22,10 @@ setup(
     license='Apache License 2.0',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': ['turtle_tf2_broadcaster = pursuit_evasion.turtle_tf2_broadcaster:main','pursuer = pursuit_evasion.pursuer:main','evader = pursuit_evasion.evader:main'
+        'console_scripts': ['turtle_tf2_broadcaster = pursuit_evasion.turtle_tf2_broadcaster:main',
+                            'pursuer = pursuit_evasion.pursuer:main',
+                            'evader = pursuit_evasion.evader:main',
+                            'obstacle = pursuit_evasion.obstacle:main',
                             ],
     },
 )
