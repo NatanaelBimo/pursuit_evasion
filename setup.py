@@ -16,16 +16,16 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='Natanael Bimo Priambodo',
+    maintainer='Natanael Bimo Priambodo & Josef Hasundungan Simanjuntak',
     maintainer_email='natanaelpriambodo@gmail.com',
     description='Pursuit and Evasion Case using Turtlesim',
     license='Apache License 2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'worldset = pursuit_evasion_v2.worldset:main',
-            'evader = pursuit_evasion_v2.evader:main',
-            'pursuer = pursuit_evasion_v2.pursuer:main'
+            'worldset = pursuit_evasion.worldset:main',
+            'evader = pursuit_evasion.evader:main',
+            'pursuer = pursuit_evasion.pursuer:main'
         ],
     },
 )

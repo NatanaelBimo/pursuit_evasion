@@ -10,13 +10,13 @@ def generate_launch_description():
         ),
 
         Node(
-            package='pursuit_evasion_v2',
+            package='pursuit_evasion',
             executable='worldset',
             name='turtle_spawn',
             output='screen'
         ),
         Node(
-            package='pursuit_evasion_v2',
+            package='pursuit_evasion',
             executable='evader',
             name='turtle_evader',
             output='screen'
@@ -24,7 +24,7 @@ def generate_launch_description():
         
         # Launch the pursuer node
         Node(
-            package='pursuit_evasion_v2',
+            package='pursuit_evasion',
             executable='pursuer',
             name='turtle_pursuer',
             output='screen'
